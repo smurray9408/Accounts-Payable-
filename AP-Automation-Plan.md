@@ -1,10 +1,18 @@
 # AP Automation Plan — Moore Supply Invoices → QuickBooks Enterprise
 
 **Company:** Murray Plumbing Co., LLC
-**Prepared:** 2026-07-02
+**Prepared:** 2026-07-02 · **Updated:** 2026-07-02 (after reviewing actual Billtrust exports)
 **Scope:** Automate the accounts-payable workflow that ingests supplier invoices from the
 Moore Supply Invoice Gateway (Billtrust) and posts them as bills in QuickBooks Enterprise
 Solutions 24.0, matched to open purchase orders.
+
+> **Key update:** Billtrust can export both a **structured CSV** (with a clean `PO_NUMBER`
+> column) and a **QuickBooks IIF** file. This *solves data acquisition* — no EDI, API, or
+> portal scraping is needed. But the IIF is a "flat" import that **destroys job costing**
+> (single lump-sum line to one expense account, no Class, no Customer:Job, no PO link). The
+> real automation is therefore: take the **CSV**, match each `PO_NUMBER` to the open QB PO, and
+> post a **PO-linked bill** so line items, Customer:Job, and Class flow through automatically.
+> See §4–§5 for the analysis of the real files.
 
 ---
 
@@ -91,29 +99,59 @@ human. The invoice PDF is attached to the bill for the audit trail.
 
 ---
 
-## 4. Data Acquisition — getting invoices out of the Gateway
+## 4. Data Acquisition — SOLVED via Billtrust export
 
-Ranked best → fallback. Confirm availability with Moore Supply / Hajoca and Billtrust before building.
+**Data acquisition is not a problem** — Billtrust exports two files directly. No EDI, API, or
+portal scraping is required for the header-level data.
 
-1. **EDI 810 electronic invoicing (best).** Hajoca/Moore Supply are large distributors that
-   typically support EDI. An 810 feed delivers structured invoice + line data directly, removing
-   the portal entirely. *Action: ask the Moore Supply rep whether EDI 810 is available for our account.*
-2. **Billtrust API / bulk export.** Billtrust exposes AR/AP APIs and the portal has **Print /
-   Download** actions; confirm whether a **bulk CSV/Excel export** of the Open tab is available
-   (structured columns already exist in the UI). This is the cleanest non-EDI path.
-3. **Automated portal extraction (RPA / headless browser).** If neither of the above is offered,
-   drive the portal with Playwright: log in, open the **Open** tab, export/scrape the invoice grid,
-   and download PDFs. Robust but more brittle; needs credential vaulting and re-tests when the
-   portal UI changes.
+### 4a. The CSV export (use this)
 
-> The invoice grid is already **structured data** (no OCR required for header-level fields).
-> OCR is only needed if we later want to reconcile *line-level* detail against the PDF.
+8 clean columns, one row per invoice:
+
+```
+INVOICE_NUMBER, INVOICE_DATE, TOTAL_DUE, PO_NUMBER,
+DISCOUNT_MESSAGE, DUE_DATE, TERMS, DISCOUNT_AMOUNT
+```
+
+Analysis of the actual export (1,837 invoices, 04/26–06/26 2026), via
+[`scripts/classify_export.py`](scripts/classify_export.py):
+
+| Bucket | Count | % | Amount | Handling |
+|--------|------:|--:|-------:|----------|
+| **Clean charge** (positive, numeric PO) | 1,516 | 82.5% | $738,443.60 | Auto-match to open PO → PO-linked bill |
+| **Credit / return** (negative) | 215 | 11.7% | −$64,732.52 | Post as **vendor credit**, not a bill |
+| **Exception** (non-numeric "PO") | 106 | 5.8% | $21,479.26 | Human review |
+
+- **PO_NUMBER is 100% populated** and clean (e.g. `52412`). Every invoice number is unique.
+- **55 POs carry >1 invoice** → partial shipments; link to the *remaining* PO balance, not the full PO.
+- **2 terms strings** to map: `2% 10TH NET 25TH 1.5%SC55` and `2% 15 DAYS / 1.5 SC 30`.
+- **Exception "PO" values** are either text (`MISC RETURNS`, `STOLEN MATERIAL`, `MISC SHOP`) or a
+  different order-number scheme (`33920255-001`) that won't match a 5-digit QB PO.
+
+### 4b. The IIF export (do **not** use as-is)
+
+Billtrust also emits a QuickBooks `.iif`. It imports in one click, but every bill is a **single
+lump-sum split to one `Plumbing Supplies` account** with:
+
+- ❌ no **Class**   ❌ no **Customer:Job**   ❌ no **line-item detail**   ❌ no **PO link**
+- PO number survives only as text after a semicolon in the memo
+- Vendor is `Moore Supply` (your QB vendor is `Moore Supply Co` — a **name mismatch** to map)
+- Its count (1,949) doesn't even match the CSV (1,837) — different snapshot/filter
+
+**Importing the IIF would collapse all $700K+ into one GL account with zero job costing** — the
+opposite of what your manual process achieves. It's only viable as a fallback coding path for the
+non-PO exception items (§6).
+
+> No OCR needed for header fields — the CSV is fully structured. OCR is only relevant later if you
+> want to reconcile *line-level* detail against the invoice PDF.
 
 ---
 
 ## 5. Posting into QuickBooks — build vs. buy
 
-QuickBooks Enterprise (Desktop) is the constraint. Options:
+The IIF settles data acquisition but not job costing — the challenge is posting **PO-linked**
+bills so lines, Customer:Job, and Class carry over. QuickBooks Enterprise (Desktop) is the
+constraint. Options:
 
 | Option | How it works | Fit for PO-linked bills | Notes |
 |--------|--------------|-------------------------|-------|
@@ -151,18 +189,18 @@ Class on a PO line · duplicate invoice # · closed/on-hold PO.
 
 ## 7. Field mapping (Gateway → QuickBooks Bill)
 
-| Gateway field | QuickBooks Bill field | Source of truth |
-|---------------|-----------------------|-----------------|
-| Invoice # (`S180579939.001`) | **Ref No.** | Gateway |
-| PO Number (`52412`) | Links to PO `TxnID` (Select PO) | Match key |
-| — (vendor) | **Vendor** = Moore Supply Co | Fixed |
-| Inv Amt (`1913.71`) | **Amount Due** (validated vs. PO) | Gateway, tolerance-checked |
-| Due Date | **Bill Due** | Gateway / terms |
-| Disc Amt, Disc Date | **Terms** (2% 10 Net), Discount Date | Gateway |
-| Line item, Qty, Cost | Bill line **Item/Qty/Cost/Amount** | **PO** (auto-populated) |
+| CSV column | QuickBooks Bill field | Source of truth |
+|------------|-----------------------|-----------------|
+| `INVOICE_NUMBER` (`S180579939.001`) | **Ref No.** (also dedup key) | CSV |
+| `PO_NUMBER` (`52412`) | Links to PO `TxnID` (Select PO) | Match key |
+| — | **Vendor** = Moore Supply Co (map from `Moore Supply`) | Fixed / mapping |
+| `TOTAL_DUE` (`1913.71`) | **Amount Due** (validated vs. PO) | CSV, tolerance-checked |
+| `DUE_DATE` | **Bill Due** | CSV |
+| `TERMS`, `DISCOUNT_AMOUNT`, `DISCOUNT_MESSAGE` | **Terms** + Discount Date/Amt | CSV (map 2 terms strings) |
+| — | Bill line **Item/Qty/Cost/Amount** | **PO** (auto-populated) |
 | — | **Customer:Job** (e.g., Chesmar Homes CT, Ltd:6464…) | **PO line** (carried over) |
 | — | **Class** (e.g., Construction) | **PO line** (carried over) |
-| PDF | Attached document on the bill | Gateway download |
+| (PDF, downloaded separately) | Attached document on the bill | Gateway download |
 
 > Because Customer:Job and Class already live on the PO lines, the automation inherits them — no
 > per-line re-keying. Exceptions only arise when a PO line is missing that data.
@@ -171,10 +209,11 @@ Class on a PO line · duplicate invoice # · closed/on-hold PO.
 
 ## 8. Phased Roadmap (crawl → walk → run)
 
-**Phase 0 — Discovery & de-risking (1–2 wks).** Confirm data-acquisition path (EDI vs. API vs.
-RPA) with Moore Supply/Billtrust. Stand up QBWC in a **test QB company file** and prove a single
-`BillAdd` linked to a PO with correct Ref No., Class, and Customer:Job. This validates the riskiest
-piece before further investment.
+**Phase 0 — De-risking (1–2 wks).** Data acquisition is already proven (CSV export +
+[`scripts/classify_export.py`](scripts/classify_export.py) triages 82.5% as clean auto-match
+candidates). Remaining risk is the QB side: stand up QBWC against a **test QB company file** and
+prove a single `BillAdd` linked to a PO that carries the correct Ref No., Class, and Customer:Job.
+That validates the one unproven piece before further investment.
 
 **Phase 1 — Assisted / "human-in-the-loop" (2–4 wks).** Ingest the open-invoice list → auto-match
 to POs → present a **review screen** showing proposed bills side-by-side with the PDF. Operator
@@ -195,7 +234,7 @@ to retire portal scraping.
 
 - **Middleware:** Python or .NET service.
 - **QB integration:** QuickBooks Web Connector + qbXML (on the QB host / server hosting the company file).
-- **Gateway ingestion:** Billtrust API/EDI if available; else Playwright for portal automation.
+- **Gateway ingestion:** Billtrust **CSV export** (proven). Optionally automate the download later.
 - **Store:** lightweight DB (SQLite/Postgres) for invoice staging, match state, dedup, and audit log.
 - **Review UI:** simple web app (approval queue + PDF preview + exception handling).
 - **Secrets:** OS keychain / vault for gateway + QB credentials.
@@ -228,9 +267,14 @@ to retire portal scraping.
 
 ## 12. Open questions (confirm before Phase 1)
 
-1. Does our Moore Supply/Hajoca account support **EDI 810** or a **Billtrust bulk export/API**? (Determines ingestion path.)
-2. Can we get a **QuickBooks test company file** to develop against safely?
-3. What **match tolerance** and **auto-post vs. always-review** policy does accounting want?
-4. Should PDFs attach to the bill in QB's Doc Center, or to a shared drive with a link?
-5. Are there **other suppliers** (Ferguson, etc. seen in the PO report) we'd want on the same pipeline later?
-6. Who owns the **exception queue**, and what's the approval threshold?
+1. ✅ *Resolved:* data comes from the **Billtrust CSV export** (no EDI/API/scraping needed).
+2. **Is per-line job costing (Customer:Job + Class via PO link) required, or is a flat GL-coded
+   bill acceptable?** This is the pivotal fork — it decides whether we build PO-matching (CSV path)
+   or just import the IIF. *(The manual process strongly implies job costing is required.)*
+3. Can we get a **QuickBooks test company file** to develop against safely?
+4. How should **credits/returns** (215 rows, −$64.7K) post — vendor credits auto-applied, or queued?
+5. What **match tolerance** and **auto-post vs. always-review** policy does accounting want?
+6. How should the **106 non-PO exceptions** be coded (default expense account, à la the IIF)?
+7. Should PDFs attach to the bill in QB's Doc Center, or to a shared drive with a link?
+8. Are there **other suppliers** (Ferguson, etc. seen in the PO report) for the same pipeline later?
+9. Who owns the **exception queue**, and what's the approval threshold?

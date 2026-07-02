@@ -1,0 +1,13 @@
+# Never commit vendor financial data / real exports
+*.csv
+*.iif
+*.IIF
+*.pdf
+out/
+buckets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
