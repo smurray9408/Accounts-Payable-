@@ -209,11 +209,13 @@ Class on a PO line · duplicate invoice # · closed/on-hold PO.
 
 ## 8. Phased Roadmap (crawl → walk → run)
 
-**Phase 0 — De-risking (1–2 wks).** Data acquisition is already proven (CSV export +
+**Phase 0 — De-risking (1–2 wks) — _in progress_.** Data acquisition is already proven (CSV export +
 [`scripts/classify_export.py`](scripts/classify_export.py) triages 82.5% as clean auto-match
-candidates). Remaining risk is the QB side: stand up QBWC against a **test QB company file** and
-prove a single `BillAdd` linked to a PO that carries the correct Ref No., Class, and Customer:Job.
-That validates the one unproven piece before further investment.
+candidates). The qbXML proof is built: [`scripts/qbxml_billadd.py`](scripts/qbxml_billadd.py)
+generates the PO-query + PO-linked `BillAdd` requests, with tests in
+[`tests/`](tests/test_qbxml_billadd.py). **Next action:** run it against a **test QB company file**
+per [`docs/phase0-poc.md`](docs/phase0-poc.md) and confirm the posted bill carries the right Ref No.,
+Class, and Customer:Job. That validates the one unproven piece before further investment.
 
 **Phase 1 — Assisted / "human-in-the-loop" (2–4 wks).** Ingest the open-invoice list → auto-match
 to POs → present a **review screen** showing proposed bills side-by-side with the PDF. Operator

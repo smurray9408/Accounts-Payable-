@@ -1,0 +1,16 @@
+{
+  "_comment": "Maps Billtrust export values to the exact names in your QuickBooks lists. Edit the right-hand sides to match QB EXACTLY (names are case- and punctuation-sensitive).",
+
+  "vendor_name": "Moore Supply Co",
+  "ap_account": "Accounts Payable",
+
+  "qbxml_version": "16.0",
+
+  "terms_map": {
+    "2% 10TH NET 25TH 1.5%SC55": "2% 10TH NET 25TH 1.5%SC55",
+    "2% 15 DAYS / 1.5 SC 30": "2% 15 DAYS / 1.5 SC 30"
+  },
+
+  "_exception_handling": "Rows whose PO_NUMBER is non-numeric (MISC RETURNS, STOLEN MATERIAL, 33920255-001, ...) have no QB PO to link. Route to review; if coded flat, use this account.",
+  "default_expense_account": "Plumbing Supplies"
+}
