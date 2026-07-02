@@ -228,6 +228,57 @@ def build(qb_path, inv_path, out_xlsx, out_csv=None, desc_map_path=None):
                 wn.cell(row=r, column=c, value=v)
             r += 1
 
+    # ---------------- Over-Billing / Backorder Check ----------------
+    # Group invoices by PO (all backorder generations .001/.002/... share the PO),
+    # sum invoiced qty per item, compare to QB ordered qty. Flag invoiced > ordered.
+    wo = wb.create_sheet("Over-Billing Check")
+    write_header(wo, ["PO #", "Item Code", "Description", "Ordered Qty",
+                      "Invoiced Qty (all gens)", "Generations", "Over/Under",
+                      "Unit Price", "$ Over-bill", "Status"])
+    autofit(wo, [10, 11, 46, 12, 20, 26, 11, 11, 12, 16])
+    inv_po_item = defaultdict(float)
+    inv_po_gens = defaultdict(set)
+    inv_po_item_price = {}
+    for inv in invoices:
+        po = inv["customer_po"]
+        if not po:
+            continue
+        inv_po_gens[po].add(inv["invoice_number"])
+        for li in inv["line_items"]:
+            inv_po_item[(po, li["item_number"])] += li["qty_shipped"]
+            inv_po_item_price[(po, li["item_number"])] = li["unit_price"]
+    qb_po_item = defaultdict(float)
+    for x in qb:
+        qb_po_item[(x["po"], x["code"])] += x["qty"]
+    r = 2
+    overbills = 0
+    for (po, code), iq in sorted(inv_po_item.items()):
+        oq = qb_po_item.get((po, code))
+        if oq is None:
+            continue  # PO/item not in this QB report; skip (can't compare)
+        gens = sorted(inv_po_gens[po])
+        if len(gens) < 2 and abs(iq - oq) < 0.001:
+            continue  # single invoice, exact match: unremarkable
+        price = inv_po_item_price.get((po, code), 0)
+        over = iq - oq
+        if over > 0.001:
+            status, fill = "OVER-BILLED", FLAG
+            overbills += 1
+            disc_rows.append(["Over-billed (backorder)", po, code, code_desc.get(code, ""),
+                              oq, "", iq, round(over * price, 2), "+".join(gens), ""])
+        elif over < -0.001:
+            status, fill = "backordered / open", WARN
+        else:
+            status, fill = "OK (multi-gen, reconciles)", OK
+        vals = [po, code, code_desc.get(code, ""), oq, iq,
+                ", ".join(g.split(".")[-1] for g in gens), round(over, 2),
+                round(price, 3), round(max(over, 0) * price, 2), status]
+        for c, v in enumerate(vals, 1):
+            cell = wo.cell(row=r, column=c, value=v)
+            if c == 10:
+                cell.fill = fill
+        r += 1
+
     # ---------------- Data Coverage ----------------
     wc = wb.create_sheet("Data Coverage", 0)
     wc["A1"] = "Moore Supply — Line-Item Audit"
@@ -253,6 +304,7 @@ def build(qb_path, inv_path, out_xlsx, out_csv=None, desc_map_path=None):
         ("FINDINGS", ""),
         ("PO lines with a material price mismatch vs Moore", po_flags),
         ("Items billed at inconsistent prices (anomalies)", anomalies),
+        ("Over-billed items across backorder generations", overbills),
         ("Open-PO lines with no invoice price reference", noref),
         ("", ""),
         ("Materiality threshold", "flag if difference >= $0.02/unit AND >= 1% of price"),

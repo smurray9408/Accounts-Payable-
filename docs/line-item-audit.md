@@ -52,8 +52,28 @@ matched by code, not by PO.
 | Data Coverage | scope, counts, findings summary, materiality, limitations |
 | PO Price Check | every open-PO line: PO unit price vs Moore's most-recent billed price, difference, status |
 | Price Anomalies | items Moore billed at **inconsistent** unit prices across invoices (likely over/undercharges) |
+| Over-Billing Check | invoices grouped by PO across backorder generations (.001/.002/…); invoiced qty vs ordered qty, flags **invoiced > ordered** (double-bill) and shows still-open backorders |
 | No Price Ref | open-PO items never seen on a captured invoice (cannot verify) |
 | Truncated | invoices whose PDF text was cut off (see limitations) |
+
+## Backorder generations
+
+Moore fills one order in parts, invoicing each shipment as a new generation of
+the same number: `S180636610.001`, `.002`, … A PO is only fully invoiced when
+its generations *sum* to the ordered quantity. The Over-Billing Check groups by
+Customer P.O., sums qty across all generations, and compares to the PO — so a
+line re-billed across generations (over-ship / double-bill) is caught, and a PO
+still short of its ordered qty shows as an open backorder.
+
+## Reading invoices straight from PDF
+
+`scripts/parse_moore_pdf.py` parses the actual PDF files (PyMuPDF) into the same
+JSONL, bypassing the 100k-character text cap entirely. Use it whenever the PDFs
+are on disk (e.g. dropped into SharePoint or saved from the Billtrust email):
+
+```bash
+python3 scripts/parse_moore_pdf.py path/to/invoices/ invoices.jsonl
+```
 
 ## Known data limitations
 
