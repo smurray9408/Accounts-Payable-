@@ -52,7 +52,7 @@ matched by code, not by PO.
 | Data Coverage | scope, counts, findings summary, materiality, limitations |
 | PO Price Check | every open-PO line: PO unit price vs Moore's most-recent billed price, difference, status |
 | Price Anomalies | items Moore billed at **inconsistent** unit prices across invoices (likely over/undercharges) |
-| Over-Billing Check | invoices grouped by PO across backorder generations (.001/.002/…); invoiced qty vs ordered qty, flags **invoiced > ordered** (double-bill) and shows still-open backorders |
+| Over-Billing and Backorder | invoices grouped by PO across backorder generations (.001/.002/…); invoiced qty vs ordered qty. Flags **invoiced > ordered** (double-bill), **never invoiced** and **partial** items (open backorders that block PO close-out) |
 | No Price Ref | open-PO items never seen on a captured invoice (cannot verify) |
 | Truncated | invoices whose PDF text was cut off (see limitations) |
 
@@ -60,10 +60,16 @@ matched by code, not by PO.
 
 Moore fills one order in parts, invoicing each shipment as a new generation of
 the same number: `S180636610.001`, `.002`, … A PO is only fully invoiced when
-its generations *sum* to the ordered quantity. The Over-Billing Check groups by
-Customer P.O., sums qty across all generations, and compares to the PO — so a
-line re-billed across generations (over-ship / double-bill) is caught, and a PO
-still short of its ordered qty shows as an open backorder.
+its generations *sum* to the ordered quantity. The check groups by Customer
+P.O., sums qty across all generations, and compares to the PO — so a line
+re-billed across generations (over-ship / double-bill) is caught, and an item
+that never appears on any generation (or only partially) shows as an open
+backorder that blocks PO close-out.
+
+Because the QB report is *open* POs, a fully received/closed line is omitted
+from it entirely; the check therefore only judges items still on the PO and
+does not attempt to flag "invoiced but not ordered" (indistinguishable from
+already-received against this baseline).
 
 ## Reading invoices straight from PDF
 
